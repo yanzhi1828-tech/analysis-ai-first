@@ -1,52 +1,112 @@
 import streamlit as st
-import yfinance as yf
+import requests
 from openai import OpenAI
 
-# 1. 设置页面
-st.set_page_config(page_title="Ryan's AI Analyst", page_icon="📈")
+# 1. 页面基础设置
+st.set_page_config(page_title="Gen Z Market Scanner", page_icon="⚡️")
 
-# 2. 读取 Key (从保险箱里拿)
-api_key = st.secrets["OPENAI_API_KEY"]
-client = OpenAI(api_key=api_key)
+# 2. 从保险箱获取两把钥匙
+openai_api_key = st.secrets["OPENAI_API_KEY"]
+fmp_api_key = st.secrets["FMP_API_KEY"]
 
-# 3. 核心功能：获取数据 (加了缓存魔法！让它记住数据，不用每次都去抓)
-# ttl=3600 表示这份数据只保存 1 小时，1小时后会自动更新
-@st.cache_data(ttl=3600)
-def get_stock_data(symbol):
-    stock = yf.Ticker(symbol)
-    return stock.info
+# 初始化 OpenAI
+client = OpenAI(api_key=openai_api_key)
 
-st.title("Rayn's first try on building websites 🫶")
-st.caption("Powered by GPT-4o & Streamlit Cloud")
+# ---------------------------------------------------------
+# 核心函数：改用 FMP API 获取数据 (稳定！不封号！)
+# ---------------------------------------------------------
+@st.cache_data(ttl=3600) # 依然加上缓存，省着点用免费额度
+def get_company_data(symbol):
+    # 这是 FMP 的官方接口，专门查公司简介和价格
+    url = f"https://financialmodelingprep.com/api/v3/profile/{symbol}?apikey={fmp_api_key}"
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        # 如果返回空列表，说明股票代码输错了
+        if not data:
+            return None
+            
+        # FMP 返回的是一个列表，我们取第一个
+        return data[0]
+    except Exception as e:
+        st.error(f"API 连接失败: {e}")
+        return None
+
+# ---------------------------------------------------------
+# 网页界面 UI
+# ---------------------------------------------------------
+st.title("⚡️ Gen Z Market Scanner")
+st.caption("No buffering. Real-time API data. Powered by FMP & GPT-4o.")
 
 # 输入框
-ticker = st.text_input("输入股票代码 (如 NVDA):", "NVDA").upper()
+ticker = st.text_input("输入股票代码 (Ticker):", "AAPL").upper()
 
 if ticker:
-    try:
-        # 使用带缓存的函数来获取数据
-        info = get_stock_data(ticker)
+    # 显示加载状态
+    with st.spinner(f'正在通过高速 API 拉取 {ticker} 数据...'):
         
-        # 显示数据
-        st.header(info.get('longName', ticker))
-        st.metric("最新股价", f"${info.get('currentPrice', 'N/A')}")
+        # 调用我们新写的函数
+        info = get_company_data(ticker)
         
-        summary = info.get('longBusinessSummary', 'No summary available.')
-        
-        # AI 分析按钮
-        if st.button("让 AI 帮我分析"):
-            with st.spinner('GPT-4o 正在思考...'):
-                completion = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": "用中文，给普通人而非专业投资人解释。"},
-                        {"role": "user", "content": f"分析这家公司: {summary}"}
-                    ]
-                )
-                st.markdown("### 🤖 分析报告")
-                st.write(completion.choices[0].message.content)
+        if info is None:
+            st.error("⚠️ 找不到这个公司，请检查代码是否正确（如: NVDA, TSLA）")
+        else:
+            # === 展示数据 (数据字段变了，我们需要对应 FMP 的格式) ===
+            
+            # 第一行：大标题和价格
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.header(info.get('companyName', ticker))
+                st.write(f"🏢 交易所: {info.get('exchangeShortName')}")
+            with col2:
+                # 价格信息
+                price = info.get('price')
+                currency = info.get('currency')
+                st.metric("当前价格", f"{price} {currency}")
 
-    except Exception as e:
-        # 即使报错了，也不要红一大片，显示得友好一点
-        st.warning(f"⚠️ Yahoo 数据源暂时拥堵中 (Rate Limited)。\n建议：请等 1 分钟后再刷新网页，或者换个股票代码试试。")
-        st.caption(f"错误详情: {e}")
+            # 公司简介 (Description)
+            description = info.get('description', '暂无简介')
+            
+            # 行业标签
+            st.info(f"🏷️ 行业: {info.get('industry')} | 👨‍💼 CEO: {info.get('ceo')}")
+
+            st.divider()
+
+            # === AI 分析部分 ===
+            if st.button("🔮 激活 GPT-4o 深度分析"):
+                with st.spinner('AI 正在阅读分析师报告...'):
+                    try:
+                        prompt = f"""
+                        Target Audience: Gen Z students.
+                        Task: Analyze this company based on the description.
+                        Tone: Fun, Insightful, No jargon.
+                        Language: Chinese (中文).
+                        
+                        Company: {info.get('companyName')}
+                        Description: {description}
+                        Price: {price}
+                        
+                        Questions to answer:
+                        1. 💰 它是靠什么赚大钱的？(Business Model)
+                        2. 🚀 为什么它最近这么受关注？(Based on general knowledge + description)
+                        3. ⚠️ 投资它的最大风险是什么？
+                        """
+
+                        completion = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {"role": "system", "content": "You are a financial influencer."},
+                                {"role": "user", "content": prompt}
+                            ]
+                        )
+                        st.markdown("### 🤖 深度分析")
+                        st.write(completion.choices[0].message.content)
+                        
+                    except Exception as e:
+                        st.error(f"AI 思考超时: {e}")
+
+# 底部版权
+st.markdown("---")
+st.caption("Data Source: Financial Modeling Prep API | Analysis: OpenAI GPT-4o")
